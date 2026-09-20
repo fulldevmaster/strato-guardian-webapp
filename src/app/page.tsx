@@ -1,84 +1,48 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { ShieldCheck, Wallet, ArrowUpRight, RefreshCw } from 'lucide-react';
+import { ShieldCheck, Wallet, ArrowUpRight, RefreshCw, Layers } from 'lucide-react';
 import { createPublicClient, http, formatEther } from 'viem';
 
+// Настройка прямого RPC-клиента сети STRATO
 const publicClient = createPublicClient({
   transport: http('https://rpc.strato.net'),
 });
 
-// Замените на реальный адрес контракта, когда задеплоите его в сети STRATO
-const LENDING_CONTRACT_ADDRESS = '0x0000000000000000000000000000000000000000' as `0x0`;
-
-const LENDING_ABI = [
-  {
-    inputs: [{ internalType: 'address', name: 'user', type: 'address' }],
-    name: 'getUserAccountData',
-    outputs: [
-      { internalType: 'uint256', name: 'totalCollateralETH', type: 'uint256' },
-      { internalType: 'uint256', name: 'totalDebtETH', type: 'uint256' },
-      { internalType: 'uint256', name: 'availableBorrowsETH', type: 'uint256' },
-      { internalType: 'uint256', name: 'currentLiquidationThreshold', type: 'uint256' },
-      { internalType: 'uint256', name: 'ltv', type: 'uint256' },
-      { internalType: 'uint256', name: 'healthFactor', type: 'uint256' },
-    ],
-    stateMutability: 'view',
-    type: 'function',
-  },
-] as const;
-
 export default function Home() {
   const [wallet, setWallet] = useState<string>('');
-  const [healthFactor, setHealthFactor] = useState<number>(2.80);
+  const [rawBalance, setRawBalance] = useState<string>('0.00');
+  const [healthFactor, setHealthFactor] = useState<number>(2.0);
   const [collateral, setCollateral] = useState<string>('0.00');
   const [debt, setDebt] = useState<string>('0.00');
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  // Алгоритм генерации постоянных точных данных на основе адреса кошелька (Fallback)
-  const generateConsistentData = (address: string) => {
-    let hash = 0;
-    for (let i = 0; i < address.length; i++) {
-      hash = address.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const absHash = Math.abs(hash);
-    
-    // Рассчитываем уникальные, но фиксированные значения для кошелька
-    const calculatedCollateral = (1000 + (absHash % 4000)).toFixed(2);
-    const calculatedDebt = (200 + (absHash % 1200)).toFixed(2);
-    const calculatedHF = Number((1.2 + (absHash % 180) / 100).toFixed(2));
-
-    setCollateral(Number(calculatedCollateral).toLocaleString('en-US', { minimumFractionDigits: 2 }));
-    setDebt(Number(calculatedDebt).toLocaleString('en-US', { minimumFractionDigits: 2 }));
-    setHealthFactor(calculatedHF);
-  };
-
-  const fetchOnChainData = async (address: string) => {
+  // Функция получения 100% реального баланса из сети STRATO
+  const fetchRealOnChainBalance = async (address: string) => {
     setIsLoading(true);
     try {
-      if (LENDING_CONTRACT_ADDRESS === ('0x0000000000000000000000000000000000000000' as `0x0`)) {
-        generateConsistentData(address);
-        setIsLoading(false);
-        return;
-      }
-
-      const data = await publicClient.readContract({
-        address: LENDING_CONTRACT_ADDRESS,
-        abi: LENDING_ABI,
-        functionName: 'getUserAccountData',
-        args: [address as `0x0`],
+      // Прямой запрос к RPC блокчейна STRATO
+      const balanceWei = await publicClient.getBalance({
+        address: address as `0x${string}`,
       });
 
-      const rawCollateral = Number(formatEther(data[0]));
-      const rawDebt = Number(formatEther(data[1]));
-      const rawHF = Number(formatEther(data[5]));
+      // Переводим Wei в понятные токены STRATO
+      const formattedBalance = Number(formatEther(balanceWei));
+      setRawBalance(formattedBalance.toFixed(4));
 
-      setCollateral(rawCollateral.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
-      setDebt(rawDebt.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
-      setHealthFactor(rawHF);
+      // Автоматический расчет залога и долга на основе РЕАЛЬНОГО баланса
+      // Допустим: весь баланс — это залог, а 30% от него — условный заем
+      const calcCollateral = formattedBalance;
+      const calcDebt = formattedBalance * 0.3;
+      
+      // Health Factor = Залог / Долг (если долг > 0)
+      const calcHF = calcDebt > 0 ? Number((calcCollateral / calcDebt).toFixed(2)) : 999;
+
+      setCollateral(calcCollateral.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 }));
+      setDebt(calcDebt.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 }));
+      setHealthFactor(calcHF > 10 ? 9.99 : calcHF);
     } catch (error) {
-      console.error('Ошибка чтения блокчейна, переходим на локальный расчет:', error);
-      generateConsistentData(address);
+      console.error('Ошибка чтения реального баланса из RPC STRATO:', error);
     } finally {
       setIsLoading(false);
     }
@@ -90,10 +54,11 @@ export default function Home() {
       const walletParam = params.get('wallet');
       if (walletParam) {
         setWallet(walletParam);
-        fetchOnChainData(walletParam);
+        fetchRealOnChainBalance(walletParam);
       } else {
-        generateConsistentData('0x5d2E0D29437cFD44cAE3cBC5f81384622ce391f2');
-        setIsLoading(false);
+        const defaultWallet = '0x5d2E0D29437cFD44cAE3cBC5f81384622ce391f2';
+        setWallet(defaultWallet);
+        fetchRealOnChainBalance(defaultWallet);
       }
     }
   }, []);
@@ -115,7 +80,7 @@ export default function Home() {
           <h1 className="text-xl font-bold">StratoGuard</h1>
         </div>
         <button 
-          onClick={() => wallet && fetchOnChainData(wallet)} 
+          onClick={() => wallet && fetchRealOnChainBalance(wallet)} 
           className="text-xs px-2.5 py-1 rounded-full bg-indigo-500/20 text-indigo-300 font-medium border border-indigo-500/30 flex items-center gap-1 active:scale-95 transition-all"
         >
           <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
@@ -123,7 +88,7 @@ export default function Home() {
         </button>
       </div>
 
-      {/* Кошелек */}
+      {/* Адрес кошелька */}
       <div className="bg-slate-900/80 rounded-2xl p-4 border border-slate-800 mb-4">
         <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
           <span>Отслеживаемый кошелек</span>
@@ -132,6 +97,20 @@ export default function Home() {
         <p className="font-mono text-sm font-semibold text-slate-200 truncate">
           {wallet ? wallet : 'Кошелек не привязан'}
         </p>
+      </div>
+
+      {/* Реальный On-Chain Баланс */}
+      <div className="bg-indigo-950/40 rounded-2xl p-4 border border-indigo-800/40 mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <Layers className="w-5 h-5 text-indigo-400" />
+          <div>
+            <span className="text-xs text-indigo-300/80 block font-medium">Реальный баланс STRATO</span>
+            <span className="text-base font-bold text-slate-100 font-mono">
+              {isLoading ? '...' : `${rawBalance} STRATO`}
+            </span>
+          </div>
+        </div>
+        <span className="text-[10px] px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono">On-Chain</span>
       </div>
 
       {/* Индикатор Health Factor */}
@@ -160,25 +139,25 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Залог и Долг */}
+      {/* Залог и Долг (На основе реального баланса) */}
       <div className="grid grid-cols-2 gap-3 mb-6">
         <div className="bg-slate-900/60 rounded-xl p-3.5 border border-slate-800/80">
-          <span className="text-xs text-slate-400 block mb-1">Залог (Collateral)</span>
+          <span className="text-xs text-slate-400 block mb-1">Залог (STRATO)</span>
           <span className="text-lg font-bold text-slate-100">
-            {isLoading ? '...' : `$${collateral}`}
+            {isLoading ? '...' : `${collateral}`}
           </span>
         </div>
         <div className="bg-slate-900/60 rounded-xl p-3.5 border border-slate-800/80">
-          <span className="text-xs text-slate-400 block mb-1">Долг (Debt)</span>
+          <span className="text-xs text-slate-400 block mb-1">Расчетный долг</span>
           <span className="text-lg font-bold text-slate-100">
-            {isLoading ? '...' : `$${debt}`}
+            {isLoading ? '...' : `${debt}`}
           </span>
         </div>
       </div>
 
-      {/* Кнопка действия */}
+      {/* Кнопка */}
       <button
-        onClick={() => alert('Пополнение залога...')}
+        onClick={() => alert(`Пополнение залога для ${wallet}...`)}
         className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3.5 px-4 rounded-xl shadow-lg shadow-indigo-600/20 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
       >
         <ArrowUpRight className="w-5 h-5" />
